@@ -137,7 +137,7 @@ each([
 ], function (type) {
 	if (seriesTypes[type]) {
 		seriesTypes[type].prototype.hasData = function () {
-			return this.points === undefined || !!this.points.length; /* != 0 */
+			return this.points !== undefined && !!this.points.length; /* != 0 */
 		};
 	}
 });
