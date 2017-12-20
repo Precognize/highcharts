@@ -26,7 +26,6 @@ var addEvent = H.addEvent,
 	extend = H.extend,
 	find = H.find,
 	fireEvent = H.fireEvent,
-	getStyle = H.getStyle,
 	grep = H.grep,
 	isNumber = H.isNumber,
 	isObject = H.isObject,
@@ -43,8 +42,7 @@ var addEvent = H.addEvent,
 	splat = H.splat,
 	svg = H.svg,
 	syncTimeout = H.syncTimeout,
-	win = H.win,
-	Renderer = H.Renderer;
+	win = H.win;
 /**
  * The Chart class. The recommended constructor is {@link Highcharts#chart}.
  * @class Highcharts.Chart
@@ -163,6 +161,10 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 		this.spacing = [];
 
 		this.bounds = { h: {}, v: {} }; // Pixel data bounds for touch zoom
+
+		// An array of functions that returns labels that should be considered
+		// for anti-collision
+		this.labelCollectors = [];
 
 		this.callback = callback;
 		this.isResizing = 0;
@@ -665,7 +667,7 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 				chart[name] = title = title.destroy(); // remove old
 			}
 
-			if (chartTitleOptions && chartTitleOptions.text && !title) {
+			if (chartTitleOptions && !title) {
 				chart[name] = chart.renderer.text(
 					chartTitleOptions.text,
 					0,
@@ -767,10 +769,10 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 
 		// Get inner width and height
 		if (!defined(widthOption)) {
-			chart.containerWidth = getStyle(renderTo, 'width');
+			chart.containerWidth = H.getStyle(renderTo, 'width');
 		}
 		if (!defined(heightOption)) {
-			chart.containerHeight = getStyle(renderTo, 'height');
+			chart.containerHeight = H.getStyle(renderTo, 'height');
 		}
 		
 		/**
@@ -826,7 +828,7 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 					doc.body.appendChild(node);
 				}
 				if (
-					getStyle(node, 'display', false) === 'none' ||
+					H.getStyle(node, 'display', false) === 'none' ||
 					node.hcOricDetached
 				) {
 					node.hcOrigStyle = {
@@ -985,7 +987,8 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 		chart._cursor = container.style.cursor;
 
 		// Initialize the renderer
-		Ren = H[optionsChart.renderer] || Renderer;
+		Ren = H[optionsChart.renderer] || H.Renderer;
+		
 		/**
 		 * The renderer instance of the chart. Each chart instance has only one
 		 * associated renderer.
@@ -1041,7 +1044,7 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 		}
 
 		// Adjust for legend
-		if (chart.legend.display) {
+		if (chart.legend && chart.legend.display) {
 			chart.legend.adjustMargins(margin, spacing);
 		}
 
@@ -1050,9 +1053,12 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 			chart[chart.extraMargin.type] =
 				(chart[chart.extraMargin.type] || 0) + chart.extraMargin.value;
 		}
-		if (chart.extraTopMargin) {
-			chart.plotTop += chart.extraTopMargin;
+		
+		// adjust for rangeSelector 
+		if (chart.adjustPlotArea) {
+			chart.adjustPlotArea();
 		}
+
 		if (!skipAxes) {
 			this.getAxisMargins();
 		}
@@ -1110,8 +1116,8 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 				defined(optionsChart.width) &&
 				defined(optionsChart.height)
 			),
-			width = optionsChart.width || getStyle(renderTo, 'width'),
-			height = optionsChart.height || getStyle(renderTo, 'height'),
+			width = optionsChart.width || H.getStyle(renderTo, 'width'),
+			height = optionsChart.height || H.getStyle(renderTo, 'height'),
 			target = e ? e.target : win;
 
 		// Width and height checks for display:none. Target is doc in IE8 and
@@ -1702,7 +1708,9 @@ extend(Chart.prototype, /** @lends Highcharts.Chart.prototype */ {
 
 		// Record preliminary dimensions for later comparison
 		tempWidth = chart.plotWidth;
-		tempHeight = chart.plotHeight = chart.plotHeight - 21; // 21 is the most common correction for X axis labels
+		// 21 is the most common correction for X axis labels
+		// use Math.max to prevent negative plotHeight
+		tempHeight = chart.plotHeight = Math.max(chart.plotHeight - 21, 0);
 
 		// Get margins by pre-rendering axes
 		each(axes, function (axis) {

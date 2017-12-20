@@ -77,7 +77,7 @@ if (!is_dir('../samples/temp')) {
 	mkdir('../samples/temp');
 }
 
-if (is_file('../samples/temp/log.txt')) {
+if (sys_get_temp_dir() . '/log.txt') {
 	copy(sys_get_temp_dir() . '/log.txt', '../samples/temp/log.txt');
 }
 
@@ -88,7 +88,7 @@ if (is_file('../samples/temp/log.txt')) {
 		<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.6.4/jquery.min.js"></script>
 		<script type="text/javascript" src="http://code.highcharts.com/highcharts.js"></script>
 		
-		<script src="commits.js?4"></script>
+		<script src="commits.js"></script>
 		
 		<style type="text/css">
 			* {
@@ -107,15 +107,13 @@ if (is_file('../samples/temp/log.txt')) {
 			
 			a {
 				text-decoration: none;
-				border-right: 10px solid white;
-				background: rgba(255,255,255,0.75);
 			}
 
-			a.visited {
+			li.visited a {
 				color: silver;
 			}
-			a.active {
-				border-right-color: black;
+			li.active {
+				background: linear-gradient(to right, rgba(255,255,255,0), rgb(124,181,236));
 			}
 			
 			body {
@@ -136,7 +134,6 @@ if (is_file('../samples/temp/log.txt')) {
 			.date {
 				color: gray;
 				display: block;
-				background: white;
 			}
 			.parents {
 				position: absolute;

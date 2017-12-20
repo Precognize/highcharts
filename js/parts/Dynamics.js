@@ -537,6 +537,9 @@ extend(Point.prototype, /** @lends Highcharts.Point.prototype */ {
 				if (options && options.dataLabels && point.dataLabel) { // #2468
 					point.dataLabel = point.dataLabel.destroy();
 				}
+				if (point.connector) {
+					point.connector = point.connector.destroy(); // #7243
+				}
 			}
 
 			// record changes in the parallel arrays
@@ -840,7 +843,7 @@ extend(Series.prototype, /** @lends Series.prototype */ {
 			newType = newOptions.type || oldOptions.type || chart.options.chart.type,
 			proto = seriesTypes[oldType].prototype,
 			n,
-			preserveGroups = [
+			groups = [
 				'group',
 				'markerGroup',
 				'dataLabelsGroup'
@@ -864,18 +867,9 @@ extend(Series.prototype, /** @lends Series.prototype */ {
 			return this.setData(newOptions.data, redraw);
 		}
 
-		// If we're changing type or zIndex, create new groups (#3380, #3404)
-		// Also create new groups for navigator series.
-		if (
-			(newType && newType !== oldType) ||
-			newOptions.zIndex !== undefined ||
-			series.options.isInternal
-		) {
-			preserveGroups.length = 0;
-		}
-
 		// Make sure preserved properties are not destroyed (#3094)
-		each(preserve.concat(preserveGroups), function (prop) {
+		preserve = groups.concat(preserve);
+		each(preserve, function (prop) {
 			preserve[prop] = series[prop];
 			delete series[prop];
 		});
@@ -900,6 +894,19 @@ extend(Series.prototype, /** @lends Series.prototype */ {
 		});
 
 		series.init(chart, newOptions);
+
+		// Update the Z index of groups (#3380, #7397)
+		if (newOptions.zIndex !== oldOptions.zIndex) {
+			each(groups, function (groupName) {
+				if (series[groupName]) {
+					series[groupName].attr({
+						zIndex: newOptions.zIndex
+					});
+				}
+			});
+		}
+
+
 		series.oldType = oldType;
 		chart.linkSeries(); // Links are lost in series.remove (#3028)
 		if (pick(redraw, true)) {

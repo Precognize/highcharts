@@ -86,7 +86,7 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 		'textDecoration', 'textOverflow', 'textOutline'],
 
 	/**
-	 * Initialize the SVG renderer. This function only exists to make the
+	 * Initialize the SVG element. This function only exists to make the
 	 * initiation process overridable. It should not be called directly.
 	 *
 	 * @param  {SVGRenderer} renderer
@@ -96,7 +96,7 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 	 * 
 	 */
 	init: function (renderer, nodeName) {
-		
+
 		/** 
 		 * The primary DOM node. Each `SVGElement` instance wraps a main DOM
 		 * node, but may also represent more nodes.
@@ -427,9 +427,10 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 	 * @typedef {Object} SVGAttributes An object of key-value pairs for SVG
 	 *   attributes. Attributes in Highcharts elements for the most parts
 	 *   correspond to SVG, but some are specific to Highcharts, like `zIndex`,
-	 *   `rotation`, `translateX`, `translateY`, `scaleX` and `scaleY`. SVG
-	 *   attributes containing a hyphen are _not_ camel-cased, they should be
-	 *   quoted to preserve the hyphen.
+	 *   `rotation`, `rotationOriginX`, `rotationOriginY`, `translateX`,
+	 *   `translateY`, `scaleX` and `scaleY`. SVG attributes containing a hyphen
+	 *   are _not_ camel-cased, they should be quoted to preserve the hyphen.
+	 *   
 	 * @example
 	 * {
 	 *     'stroke': '#ff0000', // basic
@@ -511,7 +512,7 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 		// setter
 		} else {
 
-			objectEach(hash, function (val, key) {
+			objectEach(hash, function eachAttribute(val, key) {
 				skipAttr = false;
 				
 				// Unless .attr is from the animator update, stop current
@@ -730,7 +731,6 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 	crisp: function (rect, strokeWidth) {
 
 		var wrapper = this,
-			attribs = {},
 			normalizer;
 
 		strokeWidth = strokeWidth || rect.strokeWidth || 0;
@@ -749,14 +749,7 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 		if (defined(rect.strokeWidth)) {
 			rect.strokeWidth = strokeWidth;
 		}
-
-		objectEach(rect, function (val, key) {
-			if (wrapper[key] !== val) { // only set attribute if changed
-				wrapper[key] = attribs[key] = val;
-			}
-		});
-
-		return attribs;
+		return rect;
 	},
 
 	/**
@@ -1068,8 +1061,10 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 			transform.push('rotate(90) scale(-1,1)');
 		} else if (rotation) { // text rotation
 			transform.push(
-				'rotate(' + rotation + ' ' + (element.getAttribute('x') || 0) +
-				' ' + (element.getAttribute('y') || 0) + ')'
+				'rotate(' + rotation + ' ' +
+				pick(this.rotationOriginX, element.getAttribute('x'), 0) +
+				' ' +
+				pick(this.rotationOriginY, element.getAttribute('y') || 0) + ')'
 			);
 		}
 
@@ -1238,7 +1233,8 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 			SVGElement.prototype.getStyle.call(element, 'font-size');
 		/*= } =*/
 
-		if (textStr !== undefined) {
+		// Avoid undefined and null (#7316)
+		if (defined(textStr)) {
 
 			cacheKey = textStr.toString();
 			
@@ -1504,12 +1500,18 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 			// Look for existing references to this clipPath and remove them
 			// before destroying the element (#6196).
 			each(
-				ownerSVGElement.querySelectorAll('[clip-path]'),
+				// The upper case version is for Edge
+				ownerSVGElement.querySelectorAll('[clip-path],[CLIP-PATH]'),
 				function (el) {
 					// Include the closing paranthesis in the test to rule out
 					// id's from 10 and above (#6550)
-					if (el.getAttribute('clip-path')
-							.indexOf(wrapper.clipPath.element.id + ')') > -1) {
+					if (el
+						.getAttribute('clip-path')
+						.match(RegExp(
+							// Edge puts quotes inside the url, others not
+							'[\("]#' + wrapper.clipPath.element.id + '[\)"]'
+						))
+					) {
 						el.removeAttribute('clip-path');
 					}
 				}
@@ -1681,6 +1683,7 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 	 */
 	_defaultGetter: function (key) {
 		var ret = pick(
+			this[key + 'Value'], // align getter
 			this[key],
 			this.element ? this.element.getAttribute(key) : null,
 			0
@@ -1745,6 +1748,7 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 	/*= } =*/
 	alignSetter: function (value) {
 		var convert = { left: 'start', center: 'middle', right: 'end' };
+		this.alignValue = value;
 		this.element.setAttribute('text-anchor', convert[value]);
 	},
 	opacitySetter: function (value, key, element) {		
@@ -1808,6 +1812,8 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 			otherZIndex,
 			element = this.element,
 			inserted,
+			undefinedOtherZIndex,
+			svgParent = parentNode === renderer.box,
 			run = this.added,
 			i;
 
@@ -1833,32 +1839,41 @@ extend(SVGElement.prototype, /** @lends Highcharts.SVGElement.prototype */ {
 			}
 
 			childNodes = parentNode.childNodes;
-			for (i = 0; i < childNodes.length && !inserted; i++) {
+			for (i = childNodes.length - 1; i >= 0 && !inserted; i--) {
 				otherElement = childNodes[i];
 				otherZIndex = otherElement.zIndex;
-				if (otherElement !== element && (
-						// Insert before the first element with a higher zIndex
-						pInt(otherZIndex) > value ||
-						// If no zIndex given, insert before the first element
-						// with a zIndex
-						(!defined(value) && defined(otherZIndex)) ||
-						// Negative zIndex versus no zIndex:
-						// On all levels except the highest. If the parent is
-						// <svg>, then we don't want to put items before <desc>
-						// or <defs>
-						(
-							value < 0 &&
-							!defined(otherZIndex) &&
-							parentNode !== renderer.box
-						)
+				undefinedOtherZIndex = !defined(otherZIndex);
 
-					)) {
-					parentNode.insertBefore(element, otherElement);
-					inserted = true;
+				if (otherElement !== element) {
+					if (
+						// Negative zIndex versus no zIndex:
+						// On all levels except the highest. If the parent is <svg>,
+						// then we don't want to put items before <desc> or <defs>
+						(value < 0 && undefinedOtherZIndex && !svgParent && !i)
+					) {
+						parentNode.insertBefore(element, childNodes[i]);
+						inserted = true;
+					} else if (
+						// Insert after the first element with a lower zIndex
+						pInt(otherZIndex) <= value ||
+						// If negative zIndex, add this before first undefined zIndex element
+						(undefinedOtherZIndex && (!defined(value) || value >= 0))
+					) {
+						parentNode.insertBefore(
+							element,
+							childNodes[i + 1] || null // null for oldIE export
+						);
+						inserted = true;
+					}
 				}
 			}
+
 			if (!inserted) {
-				parentNode.appendChild(element);
+				parentNode.insertBefore(
+					element,
+					childNodes[svgParent ? 3 : 0] || null // null for oldIE
+				);
+				inserted = true;
 			}
 		}
 		return inserted;
@@ -1875,6 +1890,8 @@ SVGElement.prototype.translateXSetter =
 SVGElement.prototype.translateYSetter =
 SVGElement.prototype.rotationSetter =
 SVGElement.prototype.verticalAlignSetter =
+SVGElement.prototype.rotationOriginXSetter =
+SVGElement.prototype.rotationOriginYSetter = 
 SVGElement.prototype.scaleXSetter =
 SVGElement.prototype.scaleYSetter = 
 SVGElement.prototype.matrixSetter = function (value, key) {
@@ -1912,7 +1929,8 @@ SVGElement.prototype.strokeSetter = function (value, key, element) {
  * Allows direct access to the Highcharts rendering layer in order to draw
  * primitive shapes like circles, rectangles, paths or text directly on a chart,
  * or independent from any chart. The SVGRenderer represents a wrapper object
- * for SVGin modern browsers and through the VMLRenderer, for VML in IE < 8.
+ * for SVG in modern browsers. Through the VMLRenderer, part of the `oldie.js`
+ * module, it also brings vector graphics to IE <= 8.
  *
  * An existing chart's renderer can be accessed through {@link Chart.renderer}.
  * The renderer can also be used completely decoupled from a chart.
@@ -1967,6 +1985,10 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 			/*= } =*/;
 		element = boxWrapper.element;
 		container.appendChild(element);
+
+		// Always use ltr on the container, otherwise text-anchor will be
+		// flipped and text appear outside labels, buttons, tooltip etc (#3482)
+		attr(container, 'dir', 'ltr');
 
 		// For browsers other than IE, add the namespace attribute (#1978)
 		if (container.innerHTML.indexOf('xmlns') === -1) {
@@ -2226,19 +2248,13 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 		};
 	},
 	
-	getSpanWidth: function (wrapper, tspan) {
-		var renderer = this,
-			bBox = wrapper.getBBox(true),
-			actualWidth = bBox.width;
-
-		// Old IE cannot measure the actualWidth for SVG elements (#2314)
-		if (!svg && renderer.forExport) {
-			actualWidth = renderer.measureSpanWidth(
-				tspan.firstChild.data,
-				wrapper.styles
-			);
-		}
-		return actualWidth;
+	/**
+	 * Extendable function to measure the tspan width.
+	 *
+	 * @private
+	 */
+	getSpanWidth: function (wrapper) {
+		return wrapper.getBBox(true).width;
 	},
 	
 	applyEllipsis: function (wrapper, tspan, text, width) {
@@ -2303,7 +2319,7 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 		'<': '&lt;',
 		'>': '&gt;',
 		"'": '&#39;', // eslint-disable-line quotes
-		'"': '&quot'
+		'"': '&quot;'
 	},
 
 	/**
@@ -2531,11 +2547,34 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 								);
 							}
 
-							/* 
+							/*
+							// Experimental text wrapping based on
+							// getSubstringLength
 							if (width) {
-								renderer.breakText(wrapper, width);
+								var spans = renderer.breakText(wrapper, width);
+
+								each(spans, function (span) {
+
+									var dy = getLineHeight(tspan);
+									tspan = doc.createElementNS(
+										SVG_NS,
+										'tspan'
+									);
+									tspan.appendChild(
+										doc.createTextNode(span)
+									);
+									attr(tspan, {
+										dy: dy,
+										x: parentX
+									});
+									if (spanStyle) { // #390
+										attr(tspan, 'style', spanStyle);
+									}
+									textNode.appendChild(tspan);
+								});
+
 							}
-							*/
+							// */
 
 							// Check width and apply soft breaks or ellipsis
 							if (width) {
@@ -2625,6 +2664,7 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 							}
 
 							spanNo++;
+							// */
 						}
 					}
 				});
@@ -2656,40 +2696,54 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 	breakText: function (wrapper, width) {
 		var bBox = wrapper.getBBox(),
 			node = wrapper.element,
-			textLength = node.textContent.length,
+			charnum = node.textContent.length,
+			stringWidth,
 			// try this position first, based on average character width
-			pos = Math.round(width * textLength / bBox.width),
+			guessedLineCharLength = Math.round(width * charnum / bBox.width),
+			pos = guessedLineCharLength,
+			spans = [],
 			increment = 0,
-			finalPos;
+			startPos = 0,
+			endPos,
+			safe = 0;
 
 		if (bBox.width > width) {
-			while (finalPos === undefined) {
-				textLength = node.getSubStringLength(0, pos);
+			while (startPos < charnum && safe < 100) {
 
-				if (textLength <= width) {
-					if (increment === -1) {
-						finalPos = pos;
+				while (endPos === undefined && safe < 100) {
+					stringWidth = node.getSubStringLength(
+						startPos,
+						pos - startPos
+					);
+
+					if (stringWidth <= width) {
+						if (increment === -1) {
+							endPos = pos;
+						} else {
+							increment = 1;
+						}
 					} else {
-						increment = 1;
+						if (increment === 1) {
+							endPos = pos - 1;
+						} else {
+							increment = -1;
+						}
 					}
-				} else {
-					if (increment === 1) {
-						finalPos = pos - 1;
-					} else {
-						increment = -1;
-					}
+					pos += increment;
+					safe++;
 				}
-				pos += increment;
+
+				spans.push(node.textContent.substr(startPos, endPos - startPos));
+
+				startPos = endPos;
+				pos = startPos + guessedLineCharLength;
+				endPos = undefined;			
 			}
 		}
-		console.log(
-			'width',
-			width,
-			'stringWidth',
-			node.getSubStringLength(0, finalPos)
-		)
+
+		return spans;
 	},
-	*/
+	// */
 
 	/**
 	 * Returns white for dark colors and black for bright colors.
@@ -3292,9 +3346,7 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 				// if there's no cached sizes.
 				obj.attr({ width: 0, height: 0 });
 
-				// Create a dummy JavaScript image to get the width and height.
-				// Due to a bug in IE < 8, the created element must be assigned
-				// to a variable in order to load (#292).
+				// Create a dummy JavaScript image to get the width and height. 
 				createElement('img', {
 					onload: function () {
 
@@ -3645,7 +3697,6 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 
 		// declare variables
 		var renderer = this,
-			fakeSVG = !svg && renderer.forExport,
 			wrapper,
 			attribs = {};
 
@@ -3663,14 +3714,6 @@ extend(SVGRenderer.prototype, /** @lends Highcharts.SVGRenderer.prototype */ {
 
 		wrapper = renderer.createElement('text')
 			.attr(attribs);
-
-		// Prevent wrapping from creating false offsetWidths in export in legacy
-		// IE (#1079, #1063)
-		if (fakeSVG) {
-			wrapper.css({
-				position: 'absolute'
-			});
-		}
 
 		if (!useHTML) {
 			wrapper.xSetter = function (value, key, element) {

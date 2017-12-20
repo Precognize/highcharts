@@ -199,11 +199,9 @@ Axis.prototype.buildStacks = function () {
 			axisSeries[reversedStacks ? i : len - i - 1].setStackedPoints();
 		}
 
-		// Loop up again to compute percent stack
-		if (this.usePercentage) {
-			for (i = 0; i < len; i++) {
-				axisSeries[i].setPercentStacks();
-			}
+		// Loop up again to compute percent and stream stack
+		for (i = 0; i < len; i++) {
+			axisSeries[i].modifyStacks();
 		}
 	}
 };
@@ -255,7 +253,7 @@ Axis.prototype.resetStacks = function () {
 				// Reset stacks
 				} else {
 					stack.total = null;
-					stack.cum = null;
+					stack.cumulative = null;
 				}
 			});
 		});
@@ -273,7 +271,7 @@ Axis.prototype.cleanStacks = function () {
 		// reset stacks
 		objectEach(stacks, function (type) {
 			objectEach(type, function (stack) {
-				stack.cum = stack.total;
+				stack.cumulative = stack.total;
 			});
 		});
 	}
@@ -298,7 +296,7 @@ Series.prototype.setStackedPoints = function () {
 		yDataLength = yData.length,
 		seriesOptions = series.options,
 		threshold = seriesOptions.threshold,
-		stackThreshold = seriesOptions.startFromThreshold ? threshold : 0,
+		stackThreshold = pick(seriesOptions.startFromThreshold && threshold, 0),
 		stackOption = seriesOptions.stack,
 		stacking = seriesOptions.stacking,
 		stackKey = series.stackKey,
@@ -361,10 +359,10 @@ Series.prototype.setStackedPoints = function () {
 		stack = stacks[key][x];
 		if (y !== null) {
 			stack.points[pointKey] = stack.points[series.index] =
-				[pick(stack.cum, stackThreshold)];
+				[pick(stack.cumulative, stackThreshold)];
 
 			// Record the base of the stack
-			if (!defined(stack.cum)) {
+			if (!defined(stack.cumulative)) {
 				stack.base = pointKey;
 			}
 			stack.touched = yAxis.stacksTouched;
@@ -376,6 +374,10 @@ Series.prototype.setStackedPoints = function () {
 				stack.points[pointKey][0] =
 					stack.points[series.index + ',' + x + ',0'][0];
 			}
+
+		// When updating to null, reset the point stack (#7493)
+		} else {
+			stack.points[pointKey] = stack.points[series.index] = null;
 		}
 
 		// Add value to the stack total
@@ -397,11 +399,11 @@ Series.prototype.setStackedPoints = function () {
 			stack.total = correctFloat(stack.total + (y || 0));
 		}
 
-		stack.cum = pick(stack.cum, stackThreshold) + (y || 0);
+		stack.cumulative = pick(stack.cumulative, stackThreshold) + (y || 0);
 
 		if (y !== null) {
-			stack.points[pointKey].push(stack.cum);
-			stackedYData[i] = stack.cum;
+			stack.points[pointKey].push(stack.cumulative);
+			stackedYData[i] = stack.cumulative;
 		}
 
 	}
@@ -419,40 +421,49 @@ Series.prototype.setStackedPoints = function () {
 /**
  * Iterate over all stacks and compute the absolute values to percent
  */
-Series.prototype.setPercentStacks = function () {
+Series.prototype.modifyStacks = function () {
 	var series = this,
 		stackKey = series.stackKey,
 		stacks = series.yAxis.stacks,
 		processedXData = series.processedXData,
-		stackIndicator;
+		stackIndicator,
+		stacking = series.options.stacking;
 
-	each([stackKey, '-' + stackKey], function (key) {
-		var i = processedXData.length,
-			x,
-			stack,
-			pointExtremes,
-			totalFactor;
-
-		while (i--) {
-			x = processedXData[i];
-			stackIndicator = series.getStackIndicator(
-				stackIndicator,
+	if (series[stacking + 'Stacker']) { // Modifier function exists
+		each([stackKey, '-' + stackKey], function (key) {
+			var i = processedXData.length,
 				x,
-				series.index,
-				key
-			);
-			stack = stacks[key] && stacks[key][x];
-			pointExtremes = stack && stack.points[stackIndicator.key];
-			if (pointExtremes) {
-				totalFactor = stack.total ? 100 / stack.total : 0;
-				// Y bottom value
-				pointExtremes[0] = correctFloat(pointExtremes[0] * totalFactor);
-				// Y value
-				pointExtremes[1] = correctFloat(pointExtremes[1] * totalFactor);
-				series.stackedYData[i] = pointExtremes[1];
+				stack,
+				pointExtremes;
+
+			while (i--) {
+				x = processedXData[i];
+				stackIndicator = series.getStackIndicator(
+					stackIndicator,
+					x,
+					series.index,
+					key
+				);
+				stack = stacks[key] && stacks[key][x];
+				pointExtremes = stack && stack.points[stackIndicator.key];
+				if (pointExtremes) {
+					series[stacking + 'Stacker'](pointExtremes, stack, i);
+				}
 			}
-		}
-	});
+		});
+	}
+};
+
+/**
+ * Modifier function for percent stacks. Blows up the stack to 100%.
+ */
+Series.prototype.percentStacker = function (pointExtremes, stack, i) {
+	var totalFactor = stack.total ? 100 / stack.total : 0;
+	// Y bottom value
+	pointExtremes[0] = correctFloat(pointExtremes[0] * totalFactor);
+	// Y value
+	pointExtremes[1] = correctFloat(pointExtremes[1] * totalFactor);
+	this.stackedYData[i] = pointExtremes[1];
 };
 
 /**

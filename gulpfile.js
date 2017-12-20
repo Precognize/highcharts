@@ -1,11 +1,22 @@
 /* eslint-env node, es6 */
-/* eslint no-console:0, valid-jsdoc:0 */
+/* eslint no-console:0, no-path-concat:0, valid-jsdoc:0 */
 /* eslint-disable func-style */
 
 'use strict';
 const colors = require('colors');
 const gulp = require('gulp');
 const argv = require('yargs').argv;
+const fs = require('fs');
+const {
+    getFilesInFolder
+} = require('highcharts-assembler/src/build.js');
+
+const {
+    getFile,
+    removeDirectory,
+    writeFile
+} = require('highcharts-assembler/src/utilities.js');
+
 
 /**
  * Get the product version from build.properties.
@@ -13,10 +24,11 @@ const argv = require('yargs').argv;
  * @return {string|null} Returns version number or null if not found.
  */
 const getProductVersion = () => {
-    const fs = require('fs');
-    const D = require('./assembler/dependencies.js');
+    const {
+        regexGetCapture
+    } = require('highcharts-assembler/src/dependencies.js');
     const properties = fs.readFileSync('./build.properties', 'utf8');
-    return D.regexGetCapture(/product\.version=(.+)/, properties);
+    return regexGetCapture(/product\.version=(.+)/, properties);
 };
 
 /**
@@ -26,7 +38,6 @@ const getProductVersion = () => {
  * @return {Object} Object containing all fileOptions
  */
 const getFileOptions = (base) => {
-    const B = require('./assembler/build.js');
     const DS = '[\\\\\\\/]';
     const NOTDS = '[^\\\\\\\/]';
     const SINGLEDS = DS + NOTDS; // Regex: Single directory seperator
@@ -71,9 +82,10 @@ const getFileOptions = (base) => {
     };
 
     // Modules should not be standalone, and they should exclude all parts files.
-    const fileOptions = B.getFilesInFolder(base, true, '')
+    const files = getFilesInFolder(base, true, '');
+    const fileOptions = files
         .reduce((obj, file) => {
-            if (file.indexOf('modules') > -1 || file.indexOf('themes') > -1) {
+            if (file.indexOf('modules') > -1 || file.indexOf('themes') > -1 || file.indexOf('indicators') > -1) {
                 obj[file] = {
                     exclude: new RegExp(folders.parts),
                     umd: false
@@ -116,7 +128,7 @@ const getFileOptions = (base) => {
  * @return undefined
  */
 const scripts = () => {
-    const build = require('./assembler/build').build;
+    const build = require('highcharts-assembler');
     // const argv = require('yargs').argv; Already declared in the upper scope
     const files = (argv.file) ? argv.file.split(',') : null;
     const type = (argv.type) ? argv.type : 'both';
@@ -140,18 +152,19 @@ const scripts = () => {
  * Creates a set of ES6-modules which is distributable.
  * @return {undefined}
  */
-const buildModules = () => {
-    const B = require('./assembler/build');
-    B.buildModules({
+const buildESModules = () => {
+    const {
+        buildModules
+    } = require('../highcharts-assembler/src/build.js');
+    buildModules({
         base: './js/',
-        output: './code/modules/',
+        output: './code/',
         type: 'both'
     });
 };
 
 const styles = () => {
     const sass = require('node-sass');
-    const U = require('./assembler/utilities.js');
     const fileName = 'highcharts';
     return new Promise((resolve, reject) => {
         sass.render({
@@ -162,7 +175,7 @@ const styles = () => {
                 console.error(err);
                 reject(err);
             } else {
-                U.writeFile('./code/css/' + fileName + '.css', result.css);
+                writeFile('./code/css/' + fileName + '.css', result.css);
                 resolve();
             }
         });
@@ -216,7 +229,6 @@ gulp.task('default', ['styles', 'scripts'], () => {
 
 gulp.task('ftp', function () {
     const ftp = require('vinyl-ftp');
-    const fs = require('fs');
     const paths = {
         buildsDir: './js/builds',
         distributions: [
@@ -274,14 +286,59 @@ gulp.task('ftp-watch', function () {
 });
 
 /**
- * Run the test suite. The task spawns a child process running PhantomJS.
+ * Run the test suite.
  */
-gulp.task('test', function () {
-    const spawn = require('child_process').spawn;
-    spawn('phantomjs', ['phantomtest.js'].concat(process.argv.slice(3)), {
-        cwd: 'utils/samples',
-        stdio: 'inherit'
-    });
+gulp.task('test', done => {
+
+    if (argv.help) {
+        console.log(
+`
+HIGHCHARTS TEST RUNNER
+
+Available arguments for 'gulp test':
+
+--browsers
+    Comma separated list of browsers to test. Available browsers are
+    'ChromeHeadless, Chrome, Firefox, Safari, Edge, IE' depending on what is
+    installed on the local system. Defaults to ChromeHeadless.
+
+    In addition, virtual browsers from Browserstack are supported. They are
+    prefixed by the operating system. Available BrowserStack browsers are
+    'Mac.Chrome, Mac.Firefox, Mac.Safari, Win.Chrome, Win.Edge, Win.Firefox,
+    Win.IE'.
+
+    A shorthand option, '--browsers all', runs all BroserStack machines.
+
+--debug
+    Print some debugging info.
+
+--tests
+    Comma separated list of tests to run. Defaults to '*.*' that runs all tests
+    in the 'samples/' directory.
+    Example: 'gulp test --tests unit-tests/chart/*' runs all tests in the chart
+    directory.
+
+`
+        );
+        return;
+    }
+
+    console.log('Run ' + 'gulp test --help'.cyan + ' for available options');
+
+    const Server = require('karma').Server;
+    const gutils = require('gulp-util');
+    new Server({
+        configFile: __dirname + '/test/karma-conf.js',
+        singleRun: true
+    }, err => {
+        if (err === 0) {
+            done();
+        } else {
+            done(new gutils.PluginError('karma', {
+                message: 'Tests failed'
+            }));
+        }
+    }).start();
 });
 
 /**
@@ -367,15 +424,24 @@ const generateClassReferences = ({ templateDir, destination }) => {
 
 const compile = (files, sourceFolder) => {
     const createSourceMap = true;
+
     console.log(colors.yellow('Warning: This task may take a few minutes on Mac, and even longer on Windows.'));
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         files.forEach(path => {
             const closureCompiler = require('google-closure-compiler-js');
             // const fs = require('fs');
-            const U = require('./assembler/utilities.js');
             const sourcePath = sourceFolder + path;
             const outputPath = sourcePath.replace('.src.js', '.js');
-            const src = U.getFile(sourcePath);
+            const src = getFile(sourcePath);
+            const getErrorMessage = (e) => {
+                return [
+                    'Compile error in file: ' + path,
+                    '- Type: ' + e.type,
+                    '- Line: ' + e.lineNo,
+                    '- Char : ' + e.charNo,
+                    '- Description: ' + e.description
+                ].join('\n');
+            };
             const out = closureCompiler.compile({
                 compilationLevel: 'SIMPLE_OPTIMIZATIONS',
                 jsCode: [{
@@ -385,12 +451,20 @@ const compile = (files, sourceFolder) => {
                 languageOut: 'ES5',
                 createSourceMap: createSourceMap
             });
-            U.writeFile(outputPath, out.compiledCode);
-            if (createSourceMap) {
-                U.writeFile(outputPath + '.map', out.sourceMap);
+            const errors = out.errors;
+            if (errors.length) {
+                const msg = errors.map((e) => {
+                    return getErrorMessage(e);
+                }).join('\n');
+                reject(msg);
+            } else {
+                writeFile(outputPath, out.compiledCode);
+                if (createSourceMap) {
+                    writeFile(outputPath + '.map', out.sourceMap);
+                }
+                // @todo add filesize information
+                console.log(colors.green('Compiled ' + sourcePath + ' => ' + outputPath));
             }
-            // @todo add filesize information
-            console.log(colors.green('Compiled ' + sourcePath + ' => ' + outputPath));
         });
         resolve('Compile is complete');
     });
@@ -400,9 +474,8 @@ const compile = (files, sourceFolder) => {
  * Compile the JS files in the /code folder
  */
 const compileScripts = () => {
-    const B = require('./assembler/build.js');
     const sourceFolder = './code/';
-    const files = B.getFilesInFolder(sourceFolder, true, '').filter(path => path.endsWith('.src.js'));
+    const files = getFilesInFolder(sourceFolder, true, '').filter(path => path.endsWith('.src.js'));
     return compile(files, sourceFolder)
         .then(console.log)
         .catch(console.log);
@@ -420,30 +493,42 @@ const compileLib = () => {
 };
 
 const cleanCode = () => {
-    const B = require('./assembler/build.js');
-    const U = require('./assembler/utilities.js');
+    const {
+        removeFile
+    } = require('highcharts-assembler/src/utilities.js');
     const codeFolder = './code/';
-    const files = B.getFilesInFolder(codeFolder, true, '');
+    const files = getFilesInFolder(codeFolder, true, '');
     const keep = ['.gitignore', '.htaccess', 'css/readme.md', 'js/modules/readme.md', 'js/readme.md', 'modules/readme.md', 'readme.txt'];
     const promises = files
         .filter(file => keep.indexOf(file) === -1)
-        .map(file => U.removeFile(codeFolder + file));
+        .map(file => removeFile(codeFolder + file));
     return Promise.all(promises)
         .then(() => console.log('Successfully removed code directory.'));
 };
 
 const cleanDist = () => {
-    const U = require('./assembler/utilities.js');
-    return U.removeDirectory('./build/dist').then(() => {
+    return removeDirectory('./build/dist').then(() => {
         console.log('Successfully removed dist directory.');
     }).catch(console.log);
 };
 
+const cleanApi = () => {
+    return removeDirectory('./build/api')
+        .then(() => {
+            console.log('Successfully removed api directory.');
+        })
+        .catch(console.log);
+};
+
 const copyFile = (source, target) => new Promise((resolve, reject) => {
-    const fs = require('fs');
-    const U = require('./assembler/utilities.js');
-    const directory = U.folder(target);
-    U.createDirectory(directory);
+    const {
+        dirname
+    } = require('path');
+    const {
+        createDirectory
+    } = require('highcharts-assembler/src/utilities.js');
+    const directory = dirname(target);
+    createDirectory(directory);
     let read = fs.createReadStream(source);
     let write = fs.createWriteStream(target);
     const onError = (err) => {
@@ -458,7 +543,6 @@ const copyFile = (source, target) => new Promise((resolve, reject) => {
 });
 
 const copyToDist = () => {
-    const getFilesInFolder = require('./assembler/build.js').getFilesInFolder;
     const sourceFolder = 'code/';
     const distFolder = 'build/dist/';
     // Additional files to include in distribution.
@@ -476,9 +560,31 @@ const copyToDist = () => {
     };
     // Files that should not be distributed with certain products
     const filter = {
-        highcharts: ['highmaps.js', 'highstock.js', 'modules/canvasrenderer.experimental.js', 'modules/map.js', 'modules/map-parser.js'],
-        highstock: ['highcharts.js', 'highmaps.js', 'modules/broken-axis.js', 'modules/canvasrenderer.experimental.js', 'modules/map.js', 'modules/map-parser.js'],
-        highmaps: ['highstock.js', 'modules/broken-axis.js', 'modules/canvasrenderer.experimental.js', 'modules/map-parser.js', 'modules/series-label.js', 'modules/solid-gauge.js']
+        highcharts: [
+            'highmaps.js',
+            'highstock.js',
+            'indicators/',
+            'modules/canvasrenderer.experimental.js',
+            'modules/map.js',
+            'modules/map-parser.js'
+        ].map(str => new RegExp(str)),
+        highstock: [
+            'highcharts.js',
+            'highmaps.js',
+            'modules/broken-axis.js',
+            'modules/canvasrenderer.experimental.js',
+            'modules/map.js',
+            'modules/map-parser.js'
+        ].map(str => new RegExp(str)),
+        highmaps: [
+            'highstock.js',
+            'indicators/',
+            'modules/broken-axis.js',
+            'modules/canvasrenderer.experimental.js',
+            'modules/map-parser.js',
+            'modules/series-label.js',
+            'modules/solid-gauge.js'
+        ].map(str => new RegExp(str))
     };
 
     // Copy source files to the distribution packages.
@@ -493,7 +599,11 @@ const copyToDist = () => {
             const source = sourceFolder + path;
             const filename = path.replace('.src.js', '.js').replace('js/', '');
             ['highcharts', 'highstock', 'highmaps'].forEach((lib) => {
-                if (filter[lib].indexOf(filename) === -1) {
+                const filters = filter[lib];
+                const include = !filters.find((regex) => {
+                    return regex.test(filename);
+                });
+                if (include) {
                     const target = distFolder + lib + '/code/' + path;
                     obj[target] = source;
                 }
@@ -519,18 +629,18 @@ const copyToDist = () => {
 };
 
 const getBuildProperties = () => {
-    const U = require('./assembler/utilities.js');
-    const D = require('./assembler/dependencies.js');
-    const buildProperties = U.getFile('./build.properties');
+    const {
+        regexGetCapture
+    } = require('highcharts-assembler/src/dependencies.js');
+    const buildProperties = getFile('./build.properties');
     // @todo Get rid of build.properties and perhaps use package.json in stead.
     return {
-        date: D.regexGetCapture(/highcharts\.product\.date=(.+)/, buildProperties),
-        version: D.regexGetCapture(/highcharts\.product\.version=(.+)/, buildProperties)
+        date: regexGetCapture(/highcharts\.product\.date=(.+)/, buildProperties),
+        version: regexGetCapture(/highcharts\.product\.version=(.+)/, buildProperties)
     };
 };
 
 const createProductJS = () => {
-    const U = require('./assembler/utilities.js');
     const path = './build/dist/products.js';
     const buildProperties = getBuildProperties();
     // @todo Add reasonable defaults
@@ -550,7 +660,7 @@ const createProductJS = () => {
         "nr": "${version}"
     }
 }`;
-    U.writeFile(path, content);
+    writeFile(path, content);
 };
 
 /**
@@ -655,7 +765,8 @@ const commandLine = (command) => {
 
 const filesize = () => {
     const sourceFolder = './code/';
-    // @todo Correct type names to classic and styled
+    // @todo Correct type names to classic and styled and rename the param to
+    // 'mode'
     const types = argv.type ? [argv.type] : ['classic', 'css'];
     const filenames = argv.file ? argv.file.split(',') : ['highcharts.src.js'];
     const files = filenames.reduce((arr, name) => {
@@ -693,7 +804,6 @@ const filesize = () => {
         .then(() => compile(files, sourceFolder))
         .then(() => {
             return files.reduce((o, n) => {
-                const getFile = require('./assembler/utilities.js').getFile;
                 const filename = n.replace('.src.js', '.js');
                 const compiled = getFile(sourceFolder + filename);
                 const content = getFile(sourceFolder + n);
@@ -731,30 +841,6 @@ const filesize = () => {
 };
 
 /**
- * Download a version of the API for Highstock, Highstock or Highmaps.
- * Executes a grunt task through command line.
- * @param  {string} product Which api to download. Must be lowercase.
- * @param  {string} version Which version to download.
- * @return {Promise} Returns a promise which resolves when download is completed.
- */
-const downloadAPI = (product, version) => commandLine('grunt download-api:' + product + ':' + version);
-
-/**
- * Download all the API's of Highcharts, Highstock and Highmaps.
- * @return {Promise} Returns a promise which resolves when all downloads are completed.
- */
-const downloadAllAPI = () => new Promise((resolve, reject) => {
-    // @todo Pass in version, instead of hardcoding it.
-    const version = getProductVersion();
-    const promises = ['highcharts', 'highstock', 'highmaps'].map((product) => downloadAPI(product, version));
-    Promise.all(promises).then(() => {
-        resolve('Finished downloading api\'s for Highcharts, Highstock and Highmaps');
-    }).catch((err) => {
-        reject(err);
-    });
-});
-
-/**
  * Run remaining dist tasks in build.xml.
  * @return {Promise} Returns a promise which resolves when scripts is finished.
  */
@@ -767,17 +853,17 @@ const antDist = () => commandLine('ant dist');
  * @return {undefined}
  * TODO Promisify to use in dist task.
  */
+/*
 const gzipFile = (file, output) => {
     const zlib = require('zlib');
-    const fs = require('fs');
     const gzip = zlib.createGzip();
     const inp = fs.createReadStream(file);
     const out = fs.createWriteStream(output);
     inp.pipe(gzip).pipe(out);
 };
+*/
 
 const getDirectories = (path) => {
-    const fs = require('fs');
     return fs.readdirSync(path).filter(file => fs.lstatSync(path + file).isDirectory());
 };
 
@@ -790,9 +876,6 @@ const assembleSample = (template, content) => {
 };
 
 const createExamples = (title, samplesFolder, output) => {
-    const U = require('./assembler/utilities.js');
-    const getFile = U.getFile;
-    const writeFile = U.writeFile;
     const template = getFile('samples/template-example.htm');
     const samples = getDirectories(samplesFolder);
     const convertURLToLocal = str => {
@@ -808,9 +891,9 @@ const createExamples = (title, samplesFolder, output) => {
         return str;
     };
     samples.forEach((name) => {
-        const folder = samplesFolder + name + '/';
+        const pathFolder = samplesFolder + name + '/';
         const contents = ['html', 'css', 'js'].reduce((obj, key) => {
-            let content = getFile(folder + 'demo.' + key);
+            let content = getFile(pathFolder + 'demo.' + key);
             obj[key] = content ? content : '';
             return obj;
         }, {});
@@ -824,7 +907,6 @@ const createExamples = (title, samplesFolder, output) => {
 };
 
 const copyFolder = (input, output) => {
-    const getFilesInFolder = require('./assembler/build.js').getFilesInFolder;
     const files = getFilesInFolder(input);
     const promises = files.map(file => copyFile(input + file, output + file));
     return Promise.all(promises)
@@ -865,6 +947,7 @@ const createAllExamples = () => new Promise((resolve) => {
 /**
  * Copy new current version files into a versioned folder
  */
+/*
 const copyAPIFiles = (dist, version) => {
     const B = require('./assembler/build.js');
     const notVersionedFolder = (file) => !(
@@ -895,9 +978,9 @@ const copyAPIFiles = (dist, version) => {
         console.log(message.successCopy);
     });
 };
+*/
 
 const generateAPI = (input, output, onlyBuildCurrent) => new Promise((resolve, reject) => {
-    const fs = require('fs');
     // const generate = require('highcharts-api-doc-gen/lib/index.js');
     const generate = require('./../api-docs/lib/index.js');
     const message = {
@@ -913,7 +996,10 @@ const generateAPI = (input, output, onlyBuildCurrent) => new Promise((resolve, r
             console.log(message.noSeries);
             reject(new Error(message.noSeries));
         }
-        generate(json, output, onlyBuildCurrent, () => {
+        generate(json, output, onlyBuildCurrent, {
+          platform: 'JS',
+          products: { highcharts: true, highstock: true, highmaps: true }
+        }, () => {
             console.log(message.success);
             resolve(message.success);
         });
@@ -935,11 +1021,11 @@ const generateAPI = (input, output, onlyBuildCurrent) => new Promise((resolve, r
  * @return {Promise} A Promise which resolves into undefined when done.
  */
 const generateAPIDocs = ({ treeFile, output, onlyBuildCurrent }) => {
-    const version = getBuildProperties().version;
     const message = {
         'successJSDoc': colors.green('Created tree.json')
     };
     const sourceFiles = [
+        './js/indicators',
         './js/modules',
         './js/parts',
         './js/parts-3d',
@@ -962,44 +1048,217 @@ const generateAPIDocs = ({ treeFile, output, onlyBuildCurrent }) => {
             }
         }));
     })
-    .then(() => generateAPI(treeFile, output, onlyBuildCurrent))
-    // .then(() => copyAPIFiles(output, version));
+    .then(() => generateAPI(treeFile, output, onlyBuildCurrent));
 };
 
-const uploadAPIDocs = () => {
-    const B = require('./assembler/build.js');
-    const U = require('./assembler/utilities.js');
+const logUpdate = require('log-update');
+const ProgressBar = function (user) {
+    const getBar = (options) => {
+        const length = options.length;
+        const percentage = options.count / options.total;
+        const chars = Math.floor(percentage * length);
+        return options.complete.repeat(chars) + options.incomplete.repeat(length - chars);
+    };
+    const getMsg = (options) => {
+        return options.message
+            .replace(':bar', getBar(options))
+            .replace(':count', options.count)
+            .replace(':total', options.total);
+    };
+    const options = Object.assign({
+        count: 0,
+        complete: '=',
+        incomplete: '-',
+        length: 30,
+        message: '[:bar] - :count of :total',
+        total: 100
+    }, user);
+    this.render = () => {
+        logUpdate(getMsg(options));
+    };
+    this.complete = function () {
+        this.tick = () => {};
+        logUpdate.done();
+    };
+    this.tick = function () {
+        options.count++;
+        this.render();
+        if (options.count === options.total) {
+            this.complete();
+        }
+    };
+    this.render();
+    return this;
+};
+
+const asyncForeach = (arr, fn) => {
+    const length = arr.length;
+    const generator = (j) => {
+        let promise;
+        if (j < length) {
+            promise = fn(arr[j], j, arr).then(() => {
+                // console.log('then ' + j)
+                return generator(j + 1);
+            });
+        }
+        return promise;
+    };
+    return generator(0);
+};
+
+const asyncBatchForeach = (batchSize, arr, fn) => {
+    const length = arr.length;
+    const generator = (from, to) => {
+        let result;
+        if (from < length) {
+            const batch = arr.slice(from, to);
+            const promises = batch.map((el, i) => {
+                return fn(el, from + i, arr);
+            });
+            result = Promise.all(promises).then(() => {
+                return generator(to, to + batchSize);
+            });
+        }
+        return result;
+    };
+    return generator(0, batchSize);
+};
+
+gulp.task('testing', () => {
+    let messages = [];
+    const min = 500;
+    const max = 2000;
+    for (let i = 0; i < 1000; i++) {
+        messages.push({
+            m: i,
+            time: Math.random() * (max - min) + min
+        });
+    }
+    const bar = new ProgressBar({
+        total: messages.length
+    });
+    const func = (time) => {
+        return new Promise((resolve) => {
+            let interval = setInterval(() => {
+                clearInterval(interval);
+                resolve();
+            }, time);
+        });
+    };
+    return asyncBatchForeach(100, messages, (entry) => {
+        return func(entry.time).then(() => {
+            bar.tick();
+        });
+    });
+});
+
+const isFunction = x => typeof x === 'function';
+const isArray = x => Array.isArray(x);
+const isString = x => typeof x === 'string';
+
+const uploadFiles = (params) => {
     const storage = require('./tools/jsdoc/storage/cdn.storage');
-    const sourceFolder = './build/api/';
     const mimeType = {
         'css': 'text/css',
         'html': 'text/html',
         'js': 'text/javascript',
         'json': 'application/json'
     };
-    const files = B.getFilesInFolder(sourceFolder, true, '');
-    const cdn = storage.strategy.s3({
-        Bucket: 'api-docs-bucket.highcharts.com'
+    const {
+        batchSize,
+        bucket,
+        callback,
+        files
+    } = params;
+    let result;
+    if (isString(bucket) && isArray(files)) {
+        const cdn = storage.strategy.s3({
+            Bucket: bucket
+        });
+        const uploadFile = (file) => {
+            const { from, to } = file;
+            let filePromise;
+            if (isString(from) && isString(to)) {
+                const content = getFile(from);
+                if (isString(content)) {
+                  const fileType = from.split('.').pop();
+                  filePromise = storage.push(cdn, to, content, mimeType[fileType])
+                      .then(() => isFunction(callback) && callback());
+                } else {
+                  filePromise = Promise.reject(new Error('Path is not a file: ' + from));
+                }
+            } else {
+                filePromise = Promise.reject(
+                    new Error([
+                        'Invalid file information!',
+                        'from: ' + from,
+                        'to: ' + to
+                    ].join('\n'))
+                );
+            }
+            return filePromise;
+        };
+        const onError = (err) => {
+            console.log([
+                'Found error',
+                err.stack,
+                ''
+            ].join('\n'));
+        };
+        // const promises = files.map(uploadFile);
+        // result = Promise.all(promises).catch(onError);
+        result = asyncBatchForeach(batchSize, files, uploadFile)
+          .catch((err) => onError(err));
+    } else {
+        result = Promise.reject();
+    }
+    return result;
+};
+
+const uploadAPIDocs = () => {
+    const sourceFolder = './build/api/';
+    const bucket = 'api-docs-bucket.highcharts.com';
+    const batchSize = 30000;
+    const files = getFilesInFolder(sourceFolder, true, '');
+    const tags = isString(argv.tags) ? argv.tags.split(',') : ['current'];
+    const getUploadConfig = (tag) => {
+        const bar = new ProgressBar({
+            total: files.length,
+            message: `[:bar] - Uploading ${tag}. Completed :count of :total.'`
+        });
+        const doTick = () => {
+            bar.tick();
+        };
+        const params = {
+            batchSize: batchSize,
+            bucket: bucket,
+            callback: doTick
+        };
+        const getMapOfFromTo = (fileName) => {
+            let to = fileName;
+            if (tag !== 'current') {
+                let parts = to.split('/');
+                parts.splice(1, 0, tag);
+                to = parts.join('/');
+            }
+            return {
+                from: sourceFolder + fileName,
+                to: to
+            };
+        };
+        params.files = files.map(getMapOfFromTo);
+        return params;
+    };
+    console.log(`Started upload of ${files.length} files to API under tags [${tags.join(', ')}].`);
+    return asyncForeach(tags, (tag) => {
+        return Promise.resolve(getUploadConfig(tag)).then(uploadFiles);
     });
-    const promises = files.map((fileName) => {
-        const content = U.getFile(sourceFolder + fileName);
-        const fileType = fileName.split('.').pop();
-        return storage.push(cdn, fileName, content, mimeType[fileType])
-            .then(() => {
-                console.log(('Uploaded ' + fileName).green);
-            })
-            .catch((e) => {
-                console.log(('Error uploading ' + e.message).red);
-            });
-    });
-    return Promise.all(promises);
 };
 
 const startServer = () => {
     // Start a server serving up the api reference
     const http = require('http');
     const url = require('url');
-    const fs = require('fs');
     const docport = 9005;
     const base = '127.0.0.1:' + docport;
     const apiPath = __dirname + '/build/api/';
@@ -1017,7 +1276,7 @@ const startServer = () => {
         let file = false;
         let redirect = false;
 
-        if (path === '/highcharts' || path === '/' || path === '') {
+        if (path === '/highcharts' || path === '/' || path === '') {
             redirect = '/highcharts/';
         } else if (path === '/highstock') {
             redirect = '/highstock/';
@@ -1078,36 +1337,18 @@ const startServer = () => {
     );
 };
 
-gulp.task('start-api-server', startServer);
-gulp.task('upload-api', uploadAPIDocs);
-gulp.task('generate-api', generateAPIDocs);
-gulp.task('create-productjs', createProductJS);
-gulp.task('clean-dist', cleanDist);
-gulp.task('clean-code', cleanCode);
-gulp.task('copy-to-dist', copyToDist);
-gulp.task('filesize', filesize);
-gulp.task('styles', styles);
-gulp.task('scripts', scripts);
-gulp.task('build-modules', buildModules);
-gulp.task('lint', lint);
-gulp.task('lint-samples', lintSamples);
-gulp.task('compile', compileScripts);
-gulp.task('compile-lib', compileLib);
-gulp.task('download-api', downloadAllAPI);
-gulp.task('copy-graphics-to-dist', copyGraphicsToDist);
-gulp.task('examples', createAllExamples);
-
 let apiServerRunning = false;
 
 /**
  * Create Highcharts API and class refrences from JSDOC
  */
-gulp.task('jsdoc', () => {
+const jsdoc = () => {
     const optionsClassReference = {
         templateDir: './../highcharts-docstrap',
         destination: './build/api/class-reference/'
     };
     const optionsAPI = {
+        version: getBuildProperties().version,
         treeFile: './tree.json',
         output: './build/api',
         onlyBuildCurrent: true
@@ -1135,7 +1376,28 @@ gulp.task('jsdoc', () => {
 
     return generateClassReferences(optionsClassReference)
         .then(() => generateAPIDocs(optionsAPI));
-});
+};
+
+gulp.task('start-api-server', startServer);
+gulp.task('upload-api', uploadAPIDocs);
+gulp.task('generate-api', generateAPIDocs);
+gulp.task('create-productjs', createProductJS);
+gulp.task('clean-api', cleanApi);
+gulp.task('clean-dist', cleanDist);
+gulp.task('clean-code', cleanCode);
+gulp.task('copy-to-dist', copyToDist);
+gulp.task('filesize', filesize);
+gulp.task('jsdoc', jsdoc);
+gulp.task('styles', styles);
+gulp.task('scripts', scripts);
+gulp.task('build-modules', buildESModules);
+gulp.task('lint', lint);
+gulp.task('lint-samples', lintSamples);
+gulp.task('compile', compileScripts);
+gulp.task('compile-lib', compileLib);
+gulp.task('copy-graphics-to-dist', copyGraphicsToDist);
+gulp.task('examples', createAllExamples);
+
 /**
  * Create distribution files
  */
@@ -1148,14 +1410,146 @@ gulp.task('dist', () => {
         .then(gulpify('compile', compileScripts))
         .then(gulpify('cleanDist', cleanDist))
         .then(gulpify('copyToDist', copyToDist))
-        .then(gulpify('downloadAllAPI', downloadAllAPI))
         .then(gulpify('createProductJS', createProductJS))
         .then(gulpify('createExamples', createAllExamples))
         .then(gulpify('copyGraphicsToDist', copyGraphicsToDist))
         .then(gulpify('ant-dist', antDist));
 });
+
+gulp.task('scripts-new', () => {
+    const {
+        join,
+        relative,
+        resolve,
+        sep
+    } = require('path');
+    const {
+      getOrderedDependencies
+    } = require('highcharts-assembler/src/dependencies.js');
+    const {
+      buildDistFromModules,
+      buildModules
+    } = require('highcharts-assembler/src/build.js');
+    const isUndefined = (x) => typeof x === 'undefined';
+    const version = getProductVersion();
+    const pathMasters = './js/masters/';
+    const fileOptions = getFileOptions(pathMasters);
+    const mapTypeToSource = {
+        'classic': './code/es-modules',
+        'css': './code/js/es-modules'
+    };
+    const files = (
+      (argv.file) ?
+      argv.file.split(',') :
+      getFilesInFolder(pathMasters, true)
+    );
+    const dependencyList = {
+        'classic': {},
+        'css': {}
+    };
+    const types = isString(argv.type) ? argv.type.split(',') : ['classic', 'css'];
+    const debug = argv.d || false;
+    const watch = argv.watch || false;
+    // Build all module files
+    const pathJSParts = './js/';
+    const pathESModules = './code/';
+    buildModules({
+        base: pathJSParts,
+        output: pathESModules,
+        type: types
+    });
+    types.forEach((type) => {
+        const pathSource = mapTypeToSource[type];
+        const pathESMasters = join(pathSource, 'masters');
+        buildDistFromModules({
+            base: pathESMasters,
+            debug: debug,
+            fileOptions: fileOptions,
+            files: files,
+            output: './code/',
+            type: [type],
+            version: version
+        });
+    });
+    if (watch === true) {
+        types.forEach((type) => {
+            const pathSource = mapTypeToSource[type];
+            files.forEach((filename) => {
+                const options = fileOptions[filename];
+                const exclude = (
+                  !isUndefined(options) && !isUndefined(options.exclude) ?
+                  options.exclude :
+                  false
+                );
+                const pathFile = join(pathSource, 'masters', filename);
+                const list = getOrderedDependencies(pathFile)
+                    .filter((pathModule) => {
+                        let result = true;
+                        if (exclude) {
+                            result = !exclude.test(pathModule);
+                        }
+                        return result;
+                    })
+                    .map((str) => {
+                        return resolve(str);
+                    });
+                dependencyList[type][pathFile] = list;
+            });
+        });
+        gulp.watch('./js/**/*.js', (event) => {
+            const pathFile = event.path;
+            const pathRelative = relative(pathJSParts, pathFile);
+            console.log([
+                '',
+                `${event.type}:`.cyan + ` ${relative('.', pathFile)}`,
+                'Rebuilding files: '.cyan,
+                types
+                    .map((type) => `- ${join(pathESModules, type === 'css' ? 'js' : '', 'es-modules', pathRelative)}`.gray)
+                    .join('\n')
+            ].join('\n'));
+            return buildModules({
+                base: pathJSParts,
+                files: [pathRelative.split(sep).join('/')],
+                output: pathESModules,
+                type: types
+            });
+        });
+        types.forEach((type) => {
+            const pathSource = mapTypeToSource[type];
+            const typeList = dependencyList[type];
+            const pathESMasters = join(pathSource, 'masters');
+            gulp.watch(join(pathSource, '**/*.js'), (event) => {
+                const pathFile = event.path;
+                const filesModified = Object.keys(typeList)
+                  .reduce((arr, pathMaster) => {
+                      const list = dependencyList[type][pathMaster];
+                      if (list.includes(pathFile)) {
+                          arr.push(relative(pathESMasters, pathMaster).split(sep).join('/'));
+                      }
+                      return arr;
+                  }, []);
+                console.log([
+                    `${event.type}:`.cyan + ` ${relative('.', pathFile)}`,
+                    'Rebuilding files: '.cyan,
+                    filesModified
+                      .map(str => `- ${join('code', type === 'css' ? 'js' : '', str)}`.gray)
+                      .join('\n')
+                ].join('\n'));
+                buildDistFromModules({
+                    base: pathESMasters,
+                    debug: debug,
+                    fileOptions: fileOptions,
+                    files: filesModified,
+                    output: './code/',
+                    type: [type],
+                    version: version
+                });
+            });
+        });
+    }
+});
+
 gulp.task('browserify', function () {
-    const fs = require('fs');
     const browserify = require('browserify');
     browserify('./samples/highcharts/common-js/browserify/app.js')
         .bundle(function (err, buf) {

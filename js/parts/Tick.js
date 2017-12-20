@@ -122,17 +122,23 @@ H.Tick.prototype = {
 	 */
 	handleOverflow: function (xy) {
 		var axis = this.axis,
+			labelOptions = axis.options.labels,
 			pxPos = xy.x,
 			chartWidth = axis.chart.chartWidth,
 			spacing = axis.chart.spacing,
 			leftBound = pick(axis.labelLeft, Math.min(axis.pos, spacing[3])),
 			rightBound = pick(
 				axis.labelRight,
-				Math.max(axis.pos + axis.len, chartWidth - spacing[1])
+				Math.max(
+					!axis.isRadial ? axis.pos + axis.len : 0,
+					chartWidth - spacing[1]
+				)
 			),
 			label = this.label,
 			rotation = this.rotation,
-			factor = { left: 0, center: 0.5, right: 1 }[axis.labelAlign],
+			factor = { left: 0, center: 0.5, right: 1 }[
+				axis.labelAlign || label.attr('align')
+			],
 			labelWidth = label.getBBox().width,
 			slotWidth = axis.getSlotWidth(),
 			modifiedSlotWidth = slotWidth,
@@ -145,7 +151,7 @@ H.Tick.prototype = {
 
 		// Check if the label overshoots the chart spacing box. If it does, move
 		// it. If it now overshoots the slotWidth, add ellipsis.
-		if (!rotation) {
+		if (!rotation && labelOptions.overflow !== false) {
 			leftPos = pxPos - factor * labelWidth;
 			rightPos = pxPos + (1 - factor) * labelWidth;
 
@@ -195,7 +201,7 @@ H.Tick.prototype = {
 
 		if (textWidth) {
 			css.width = textWidth;
-			if (!(axis.options.labels.style || {}).textOverflow) {
+			if (!(labelOptions.style || {}).textOverflow) {
 				css.textOverflow = 'ellipsis';
 			}
 			label.css(css);
@@ -268,6 +274,15 @@ H.Tick.prototype = {
 			staggerLines = axis.staggerLines,
 			rotCorr = axis.tickRotCorr || { x: 0, y: 0 },
 			yOffset = labelOptions.y,
+
+			// Adjust for label alignment if we use reserveSpace: true (#5286)
+			labelOffsetCorrection = (
+				!horiz && !axis.reserveSpaceDefault ?
+					-axis.labelOffset * (
+						axis.labelAlign === 'center' ? 0.5 : 1
+					) :
+					0
+			),
 			line;
 
 		if (!defined(yOffset)) {
@@ -282,8 +297,15 @@ H.Tick.prototype = {
 			}
 		}
 
-		x = x + labelOptions.x + rotCorr.x - (tickmarkOffset && horiz ?
-			tickmarkOffset * transA * (reversed ? -1 : 1) : 0);
+		x = x +
+			labelOptions.x +
+			labelOffsetCorrection +
+			rotCorr.x -
+			(
+				tickmarkOffset && horiz ?
+					tickmarkOffset * transA * (reversed ? -1 : 1) :
+					0
+			);
 		y = y + yOffset - (tickmarkOffset && !horiz ?
 			tickmarkOffset * transA * (reversed ? 1 : -1) : 0);
 
@@ -499,8 +521,13 @@ H.Tick.prototype = {
 				show = false;
 
 			// Handle label overflow and show or hide accordingly
-			} else if (horiz && !axis.isRadial && !labelOptions.step &&
-					!labelOptions.rotation && !old && opacity !== 0) {
+			} else if (
+				horiz &&
+				!labelOptions.step &&
+				!labelOptions.rotation &&
+				!old &&
+				opacity !== 0
+			) {
 				tick.handleOverflow(xy);
 			}
 

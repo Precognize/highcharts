@@ -22,10 +22,8 @@ var H = Highcharts,
 	isObject = H.isObject,
 	offset = H.offset,
 	pick = H.pick,
-	removeEvent = H.removeEvent,
 	splat = H.splat,
-	Tooltip = H.Tooltip,
-	win = H.win;
+	Tooltip = H.Tooltip;
 
 /**
  * The mouse and touch tracker object. Each {@link Chart} item has one
@@ -119,15 +117,7 @@ Highcharts.Pointer.prototype = {
 	 *         A browser event with extended properties `chartX` and `chartY`.
 	 */
 	normalize: function (e, chartPosition) {
-		var chartX,
-			chartY,
-			ePos;
-
-		// IE normalizing
-		e = e || win.event;
-		if (!e.target) {
-			e.target = e.srcElement;
-		}
+		var ePos;
 
 		// iOS (#2757)
 		ePos = e.touches ?  (e.touches.length ? e.touches.item(0) : e.changedTouches[0]) : e;
@@ -137,19 +127,9 @@ Highcharts.Pointer.prototype = {
 			this.chartPosition = chartPosition = offset(this.chart.container);
 		}
 
-		// chartX and chartY
-		if (ePos.pageX === undefined) { // IE < 9. #886.
-			chartX = Math.max(e.x, e.clientX - chartPosition.left); // #2005, #2129: the second case is 
-				// for IE10 quirks mode within framesets
-			chartY = e.y;
-		} else {
-			chartX = ePos.pageX - chartPosition.left;
-			chartY = ePos.pageY - chartPosition.top;
-		}
-
 		return extend(e, {
-			chartX: Math.round(chartX),
-			chartY: Math.round(chartY)
+			chartX: Math.round(ePos.pageX - chartPosition.left),
+			chartY: Math.round(ePos.pageY - chartPosition.top)
 		});
 	},
 
@@ -250,14 +230,15 @@ Highcharts.Pointer.prototype = {
 	getChartCoordinatesFromPoint: function (point, inverted) {
 		var series = point.series,
 			xAxis = series.xAxis,
-			yAxis = series.yAxis;
+			yAxis = series.yAxis,
+			plotX = pick(point.clientX, point.plotX);
 
 		if (xAxis && yAxis) {
 			return inverted ? {
-				chartX: xAxis.len + xAxis.pos - point.clientX,
+				chartX: xAxis.len + xAxis.pos - plotX,
 				chartY: yAxis.len + yAxis.pos - point.plotY
 			} : {
-				chartX: point.clientX + xAxis.pos,
+				chartX: plotX + xAxis.pos,
 				chartY: point.plotY + yAxis.pos
 			};
 		}
@@ -292,11 +273,13 @@ Highcharts.Pointer.prototype = {
 		series,
 		isDirectTouch,
 		shared,
-		coordinates
+		coordinates,
+		params
 	) {
 		var hoverPoint,
 			hoverPoints = [],
 			hoverSeries = existingHoverSeries,
+			isBoosting = params && params.isBoosting,
 			useExisting = !!(isDirectTouch && existingHoverPoint),
 			notSticky = hoverSeries && !hoverSeries.stickyTracking,
 			filter = function (s) {
@@ -334,9 +317,16 @@ Highcharts.Pointer.prototype = {
 				// Get all points with the same x value as the hoverPoint
 				each(searchSeries, function (s) {
 					var point = find(s.points, function (p) {
-						return p.x === hoverPoint.x;
+						return p.x === hoverPoint.x && !p.isNull;
 					});
-					if (isObject(point) && !point.isNull) {
+					if (isObject(point)) {
+						/*
+						* Boost returns a minimal point. Convert it to a usable
+						* point for tooltip and states.
+						*/
+						if (isBoosting) {
+							point = s.getPoint(point);
+						}
 						hoverPoints.push(point);
 					}
 				});
@@ -344,7 +334,6 @@ Highcharts.Pointer.prototype = {
 				hoverPoints.push(hoverPoint);
 			}
 		}
-
 		return {
 			hoverPoint: hoverPoint,
 			hoverSeries: hoverSeries,
@@ -361,7 +350,9 @@ Highcharts.Pointer.prototype = {
 		var pointer = this,
 			chart = pointer.chart,
 			series = chart.series,
-			tooltip = chart.tooltip,
+			tooltip = chart.tooltip && chart.tooltip.options.enabled ? 
+				chart.tooltip :
+				undefined,
 			shared = tooltip ? tooltip.shared : false,
 			hoverPoint = p || chart.hoverPoint,
 			hoverSeries = hoverPoint && hoverPoint.series || chart.hoverSeries,
@@ -376,12 +367,14 @@ Highcharts.Pointer.prototype = {
 				series,
 				isDirectTouch,
 				shared,
-				e
+				e,
+				{ isBoosting: chart.isBoosting }
 			),
 			useSharedTooltip,
 			followPointer,
 			anchor,
 			points;
+
 		// Update variables from hoverData.
 		hoverPoint = hoverData.hoverPoint;
 		points = hoverData.hoverPoints;
@@ -753,16 +746,19 @@ Highcharts.Pointer.prototype = {
 
 	onContainerMouseDown: function (e) {
 
-		e = this.normalize(e);
+		if (e.button !== 2) {
 
-		this.zoomOption(e);
+			e = this.normalize(e);
 
-		// issue #295, dragging not always working in Firefox
-		if (e.preventDefault) {
-			e.preventDefault();
+			this.zoomOption(e);
+
+			// issue #295, dragging not always working in Firefox
+			if (e.preventDefault) {
+				e.preventDefault();
+			}
+
+			this.dragStart(e);
 		}
-
-		this.dragStart(e);
 	},
 
 
@@ -941,9 +937,13 @@ Highcharts.Pointer.prototype = {
 		container.onclick = function (e) {
 			pointer.onContainerClick(e);
 		};
-		addEvent(container, 'mouseleave', pointer.onContainerMouseLeave);
-		if (H.chartCount === 1) {
-			addEvent(
+		this.unbindContainerMouseLeave = addEvent(
+			container,
+			'mouseleave',
+			pointer.onContainerMouseLeave
+		);
+		if (!H.unbindDocumentMouseUp) {
+			H.unbindDocumentMouseUp = addEvent(
 				ownerDoc,
 				'mouseup',
 				pointer.onDocumentMouseUp
@@ -956,8 +956,8 @@ Highcharts.Pointer.prototype = {
 			container.ontouchmove = function (e) {
 				pointer.onContainerTouchMove(e);
 			};
-			if (H.chartCount === 1) {
-				addEvent(
+			if (!H.unbindDocumentTouchEnd) {
+				H.unbindDocumentTouchEnd = addEvent(
 					ownerDoc,
 					'touchend',
 					pointer.onDocumentTouchEnd
@@ -971,22 +971,20 @@ Highcharts.Pointer.prototype = {
 	 * Destroys the Pointer object and disconnects DOM events.
 	 */
 	destroy: function () {
-		var pointer = this,
-			ownerDoc = this.chart.container.ownerDocument;
+		var pointer = this;
 
 		if (pointer.unDocMouseMove) {
 			pointer.unDocMouseMove();
 		}
 
-		removeEvent(
-			pointer.chart.container,
-			'mouseleave',
-			pointer.onContainerMouseLeave
-		);
+		this.unbindContainerMouseLeave();
+		
 		if (!H.chartCount) {
-			removeEvent(ownerDoc, 'mouseup', pointer.onDocumentMouseUp);
-			if (H.hasTouch) {
-				removeEvent(ownerDoc, 'touchend', pointer.onDocumentTouchEnd);
+			if (H.unbindDocumentMouseUp) {
+				H.unbindDocumentMouseUp = H.unbindDocumentMouseUp();
+			}
+			if (H.unbindDocumentTouchEnd) {
+				H.unbindDocumentTouchEnd = H.unbindDocumentTouchEnd();
 			}
 		}
 

@@ -17,6 +17,7 @@ var attr = H.attr,
 	isFirefox = H.isFirefox,
 	isMS = H.isMS,
 	isWebKit = H.isWebKit,
+	pick = H.pick,
 	pInt = H.pInt,
 	SVGElement = H.SVGElement,
 	SVGRenderer = H.SVGRenderer,
@@ -60,12 +61,6 @@ extend(SVGElement.prototype, /** @lends SVGElement.prototype */ {
 	htmlGetBBox: function () {
 		var wrapper = this,
 			element = wrapper.element;
-
-		// faking getBBox in exported SVG in legacy IE (is this a duplicate of
-		// the fix for #1079?)
-		if (element.nodeName === 'text') {
-			element.style.position = 'absolute';
-		}
 
 		return {
 			x: element.offsetLeft,
@@ -270,7 +265,8 @@ extend(SVGRenderer.prototype, /** @lends SVGRenderer.prototype */ {
 			if (value !== element.innerHTML) {
 				delete this.bBox;
 			}
-			element.innerHTML = this.textStr = value;
+			this.textStr = value;
+			element.innerHTML = pick(value, '');
 			wrapper.htmlUpdateTransform();
 		};
 
@@ -348,15 +344,17 @@ extend(SVGRenderer.prototype, /** @lends SVGRenderer.prototype */ {
 								cls = attr(parentGroup.element, 'class');
 
 							// Common translate setter for X and Y on the HTML
-							// group. Using CSS transform instead of left and
-							// right prevents flickering in IE and Edge when 
-							// moving tooltip (#6957).
+							// group. Reverted the fix for #6957 du to
+							// positioning problems and offline export (#7254,
+							// #7280, #7529)
 							function translateSetter(value, key) {
 								parentGroup[key] = value;
-								htmlGroupStyle[renderer.getTransformKey()] =
-									'translate(' +
-										parentGroup.x + 'px,' +
-										parentGroup.y + 'px)';
+
+								if (key === 'translateX') {
+									htmlGroupStyle.left = value + 'px';
+								} else {
+									htmlGroupStyle.top = value + 'px';
+								}
 								
 								parentGroup.doTransform = true;
 							}
@@ -389,10 +387,17 @@ extend(SVGRenderer.prototype, /** @lends SVGRenderer.prototype */ {
 							// Set listeners to update the HTML div's position
 							// whenever the SVG group position is changed.
 							extend(parentGroup, {
-								classSetter: function (value) {
-									this.element.setAttribute('class', value);
-									htmlGroup.className = value;
-								},
+								// (#7287) Pass htmlGroup to use
+								// the related group 
+								classSetter: (function (htmlGroup) {
+									return function (value) {
+										this.element.setAttribute(
+											'class',
+											value
+										);
+										htmlGroup.className = value;
+									};
+								}(htmlGroup)),
 								on: function () {
 									if (parents[0].div) { // #6418
 										wrapper.on.apply(

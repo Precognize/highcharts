@@ -684,9 +684,10 @@ H.Series = H.seriesType('line', null, { // base series options
 
 	/**
 	 * Whether to stack the values of each series on top of each other.
-	 * Possible values are null to disable, "normal" to stack by value or
-	 * "percent". When stacking is enabled, data must be sorted in ascending
-	 * X order.
+	 * Possible values are `null` to disable, `"normal"` to stack by value or
+	 * `"percent"`. When stacking is enabled, data must be sorted in ascending
+	 * X order. A special stacking option is with the streamgraph series type,
+	 * where the stacking option is set to `"stream"`.
 	 * 
 	 * @validvalue [null, "normal", "percent"]
 	 * @type {String}
@@ -1117,6 +1118,7 @@ H.Series = H.seriesType('line', null, { // base series options
 
 				/**
 				 * Animation when hovering over the marker.
+				 * @type {Boolean|Object}
 				 */
 				animation: {
 					duration: 50
@@ -1642,8 +1644,7 @@ H.Series = H.seriesType('line', null, { // base series options
 		},
 
 		/**
-		 * The background color or gradient for the data label. Defaults to
-		 * `undefined`.
+		 * The background color or gradient for the data label.
 		 * 
 		 * @type {Color}
 		 * @sample {highcharts} highcharts/plotoptions/series-datalabels-box/ Data labels box options
@@ -1710,6 +1711,15 @@ H.Series = H.seriesType('line', null, { // base series options
 		 * @sample {highcharts} highcharts/plotoptions/series-datalabels-rotation/ Vertical labels
 		 * @default 0
 		 * @apioption plotOptions.series.dataLabels.rotation
+		 */
+
+		/**
+		 * Whether to [use HTML](http://www.highcharts.com/docs/chart-concepts/labels-
+		 * and-string-formatting#html) to render the labels.
+		 *
+		 * @type {Boolean}
+		 * @default false
+		 * @apioption plotOptions.series.dataLabels.useHTML
 		 */
 
 		/**
@@ -1781,6 +1791,55 @@ H.Series = H.seriesType('line', null, { // base series options
 		 * @default 6
 		 * @since 2.3.5
 		 * @apioption plotOptions.series.dataLabels.zIndex
+		 */
+		
+		/**
+		 * A declarative filter for which data labels to display. The
+		 * declarative filter is designed for use when callback functions are
+		 * not available, like when the chart options require a pure JSON
+		 * structure or for use with graphical editors. For programmatic
+		 * control, use the `formatter` instead, and return `false` to disable
+		 * a single data label.
+		 *
+		 * @example
+		 * filter: {
+         *     property: 'percentage',
+         *     operator: '>',
+         *     value: 4
+         * }
+		 *
+		 * @sample highcharts/demo/pie-monochrome
+		 *         Data labels filtered by percentage
+		 *
+		 * @type {Object}
+		 * @since 6.0.3
+		 * @apioption plotOptions.series.dataLabels.filter
+		 */
+		
+		/**
+		 * The point property to filter by. Point options are passed directly to
+		 * properties, additionally there are `y` value, `percentage` and others
+		 * listed under [Point](https://api.highcharts.com/class-reference/Highcharts.Point)
+		 * members.
+		 *
+		 * @type {String}
+		 * @apioption plotOptions.series.dataLabels.filter.property
+		 */
+		
+		/**
+		 * The operator to compare by. Can be one of `>`, `<`, `>=`, `<=`, `==`,
+		 * and `===`.
+		 *
+		 * @type {String}
+		 * @validvalue [">", "<", ">=", "<=", "==", "===""]
+		 * @apioption plotOptions.series.dataLabels.filter.operator
+		 */
+		
+		/**
+		 * The value to compare against.
+		 *
+		 * @type {Mixed}
+		 * @apioption plotOptions.series.dataLabels.filter.value
 		 */
 	},
 	// draw points outside the plot area when the number of points is less than
@@ -2432,7 +2491,8 @@ H.Series = H.seriesType('line', null, { // base series options
 			xIncrement = this.xIncrement,
 			date,
 			pointInterval,
-			pointIntervalUnit = options.pointIntervalUnit;
+			pointIntervalUnit = options.pointIntervalUnit,
+			dstCrossover = 0;
 
 		xIncrement = pick(xIncrement, options.pointStart, 0);
 
@@ -2459,7 +2519,11 @@ H.Series = H.seriesType('line', null, { // base series options
 					date[Date.hcGetFullYear]() + pointInterval
 				);
 			}
-			pointInterval = date - xIncrement;
+
+			if (Date.hcHasTimeZone) {
+				dstCrossover = H.getTZOffset(date) - H.getTZOffset(xIncrement);
+			}
+			pointInterval = date - xIncrement + dstCrossover;
 
 		}
 
@@ -2789,7 +2853,7 @@ H.Series = H.seriesType('line', null, { // base series options
 
 			// Forgetting to cast strings to numbers is a common caveat when
 			// handling CSV or JSON
-			if (isString(yData[0])) {
+			if (yData && isString(yData[0])) {
 				H.error(14, true);
 			}
 
@@ -2858,6 +2922,7 @@ H.Series = H.seriesType('line', null, { // base series options
 			xExtremes,
 			val2lin = xAxis && xAxis.val2lin,
 			isLog = xAxis && xAxis.isLog,
+			throwOnUnsorted = series.requireSorting,
 			min,
 			max;
 
@@ -2934,8 +2999,9 @@ H.Series = H.seriesType('line', null, { // base series options
 			// Unsorted data is not supported by the line tooltip, as well as
 			// data grouping and navigation in Stock charts (#725) and width
 			// calculation of columns (#1900)
-			} else if (distance < 0 && series.requireSorting) {
+			} else if (distance < 0 && throwOnUnsorted) {
 				H.error(15);
+				throwOnUnsorted = false; // Only once
 			}
 		}
 
@@ -3092,12 +3158,16 @@ H.Series = H.seriesType('line', null, { // base series options
 		}
 
 		/**
-		 * Read only. An array containing the series' data point objects. To
+		 * Read only. An array containing those values converted to points, but
+		 * in case the series data length exceeds the `cropThreshold`, or if the
+		 * data is grouped, `series.data` doesn't contain all the points. It
+		 * only contains the points that have been created on demand. To
 		 * modify the data, use {@link Highcharts.Series#setData} or {@link
 		 * Highcharts.Point#update}.
 		 *
 		 * @name data
 		 * @memberOf Highcharts.Series
+		 * @see  Series.points
 		 * @type {Array.<Highcharts.Point>}
 		 */
 		series.data = data;
@@ -3110,7 +3180,7 @@ H.Series = H.seriesType('line', null, { // base series options
 		 * is grouped, these can't be correlated one to one. To
 		 * modify the data, use {@link Highcharts.Series#setData} or {@link
 		 * Highcharts.Point#update}.
-		 * @name point
+		 * @name points
 		 * @memberof Series
 		 * @type {Array.<Point>}
 		 */
@@ -3168,7 +3238,7 @@ H.Series = H.seriesType('line', null, { // base series options
 				j = y.length;
 				if (j) { // array, like ohlc or range data
 					while (j--) {
-						if (y[j] !== null) {
+						if (typeof y[j] === 'number') { // #7380
 							activeYData[activeCounter++] = y[j];
 						}
 					}
@@ -3528,7 +3598,6 @@ H.Series = H.seriesType('line', null, { // base series options
 		var series = this,
 			points = series.points,
 			chart = series.chart,
-			plotY,
 			i,
 			point,
 			symbol,
@@ -3553,7 +3622,6 @@ H.Series = H.seriesType('line', null, { // base series options
 
 			for (i = 0; i < points.length; i++) {
 				point = points[i];
-				plotY = point.plotY;
 				graphic = point.graphic;
 				pointMarkerOptions = point.marker || {};
 				hasPointMarker = !!point.marker;
@@ -3561,7 +3629,7 @@ H.Series = H.seriesType('line', null, { // base series options
 				isInside = point.isInside;
 
 				// only draw the point if y is defined
-				if (enabled && isNumber(plotY) && point.y !== null) {
+				if (enabled && !point.isNull) {
 
 					// Shortcuts
 					symbol = pick(pointMarkerOptions.symbol, series.symbol);
@@ -3966,7 +4034,9 @@ H.Series = H.seriesType('line', null, { // base series options
 				attribs;
 
 			if (graph) {
-				graph.endX = graphPath.xMap;
+				graph.endX = series.preventGraphAnimation ?
+					null :
+					graphPath.xMap;
 				graph.animate({ d: graphPath });
 
 			} else if (graphPath.length) { // #1487
@@ -4638,6 +4708,9 @@ H.Series = H.seriesType('line', null, { // base series options
 /**
  * Individual color for the point. By default the color is pulled from
  * the global `colors` array.
+ *
+ * In styled mode, the `color` option doesn't take effect. Instead, use 
+ * `colorIndex`.
  * 
  * @type {Color}
  * @sample {highcharts} highcharts/point/color/ Mark the highest point
@@ -4648,8 +4721,8 @@ H.Series = H.seriesType('line', null, { // base series options
 
 /**
  * Styled mode only. A specific color index to use for the point, so its
- * graphic representations are given the class name `highcharts-color-
- * {n}`.
+ * graphic representations are given the class name
+ * `highcharts-color-{n}`.
  * 
  * @type {Number}
  * @since 5.0.0

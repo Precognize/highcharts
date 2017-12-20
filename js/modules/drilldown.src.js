@@ -15,7 +15,8 @@ import '../parts/Series.js';
 import '../parts/ColumnSeries.js';
 import '../parts/Tick.js';
 
-var noop = H.noop,
+var animObject = H.animObject,
+	noop = H.noop,
 	color = H.color,
 	defaultOptions = H.defaultOptions,
 	each = H.each,
@@ -203,7 +204,7 @@ defaultOptions.drilldown = {
 			 *
 			 * @type {String}
 			 * @default top
-			 * @validvalues ["top", "middle", "bottom"]
+			 * @validvalue ["top", "middle", "bottom"]
 			 * @product highcharts highmaps
 			 * @apioption drilldown.drillUpButton.position.verticalAlign
 			 */
@@ -214,7 +215,7 @@ defaultOptions.drilldown = {
 		 * 
 		 * @type {String}
 		 * @default plotBox
-		 * @validvalues ["plotBox", "spacingBox"]
+		 * @validvalue ["plotBox", "spacingBox"]
 		 * @since 3.0.8
 		 * @product highcharts highmaps
 		 * @apioption drilldown.drillUpButton.relativeTo
@@ -439,7 +440,8 @@ Chart.prototype.addSingleSeriesAsDrilldown = function (point, ddOptions) {
 			xMax: xAxis && xAxis.userMax,
 			yMin: yAxis && yAxis.userMin,
 			yMax: yAxis && yAxis.userMax
-		}
+		},
+		resetZoomButton: this.resetZoomButton
 	}, colorProp);
 
 	// Push it to the lookup array
@@ -481,7 +483,15 @@ Chart.prototype.applyDrilldown = function () {
 			}
 		});
 	}
-	
+
+	// We have a reset zoom button. Hide it and detatch it from the chart. It
+	// is preserved to the layer config above.
+	if (this.resetZoomButton) {
+		this.resetZoomButton.hide();
+		delete this.resetZoomButton;
+	}
+
+	this.pointer.reset();
 	this.redraw();
 	this.showDrillUpButton();
 };
@@ -612,6 +622,13 @@ Chart.prototype.drillUp = function () {
 				newSeries.xAxis.setExtremes(oldExtremes.xMin, oldExtremes.xMax, false);
 				newSeries.yAxis.setExtremes(oldExtremes.yMin, oldExtremes.yMax, false);
 			}
+
+			// We have a resetZoomButton tucked away for this level. Attatch
+			// it to the chart and show it.
+			if (level.resetZoomButton) {
+				chart.resetZoomButton = level.resetZoomButton;
+				chart.resetZoomButton.show();
+			}
 		}
 	}
 
@@ -631,6 +648,13 @@ Chart.prototype.drillUp = function () {
 
 	this.ddDupes.length = []; // #3315
 };
+
+// Don't show the reset button if we already are displaying the drillUp button.
+wrap(Chart.prototype, 'showResetZoom', function (proceed) {
+	if (!this.drillUpButton) {
+		proceed.apply(this, Array.prototype.slice.call(arguments, 1));
+	}
+});
 
 
 /**
@@ -666,7 +690,7 @@ ColumnSeries.prototype.animateDrillupTo = function (init) {
 
 
 		// Do dummy animation on first point to get to complete
-		setTimeout(function () {
+		H.syncTimeout(function () {
 			if (newSeries.points) { // May be destroyed in the meantime, #3389
 				each(newSeries.points, function (point, i) {  
 					// Fade in other points			  
@@ -681,9 +705,9 @@ ColumnSeries.prototype.animateDrillupTo = function (init) {
 					}
 
 					if (dataLabel && !dataLabel.hidden) { // #6127
-						dataLabel[verb](inherit);
+						dataLabel.fadeIn(); // #7384
 						if (point.connector) {
-							point.connector[verb](inherit);
+							point.connector.fadeIn();
 						}
 					}
 				});
@@ -700,7 +724,7 @@ ColumnSeries.prototype.animateDrilldown = function (init) {
 	var series = this,
 		drilldownLevels = this.chart.drilldownLevels,
 		animateFrom,
-		animationOptions = this.chart.options.drilldown.animation,
+		animationOptions = animObject(this.chart.options.drilldown.animation),
 		xAxis = this.xAxis;
 
 	if (!init) {
@@ -746,7 +770,7 @@ ColumnSeries.prototype.animateDrilldown = function (init) {
  * and animate them into the origin point in the upper series.
  */
 ColumnSeries.prototype.animateDrillupFrom = function (level) {
-	var animationOptions = this.chart.options.drilldown.animation,
+	var animationOptions = animObject(this.chart.options.drilldown.animation),
 		group = this.group,
 		// For 3d column series all columns are added to one group 
 		// so we should not delete the whole group. #5297
@@ -782,7 +806,7 @@ ColumnSeries.prototype.animateDrillupFrom = function (level) {
 			animateTo.fill = level.color;
 			/*= } =*/
 
-			if (animationOptions) {
+			if (animationOptions.duration) {
 				graphic.animate(
 					animateTo,
 					H.merge(animationOptions, { complete: complete })
@@ -1014,9 +1038,11 @@ wrap(H.Series.prototype, 'drawDataLabels', function (proceed) {
 			);
 
 		if (point.drilldown && point.dataLabel) {
+			/*= if (build.classic) { =*/
 			if (css.color === 'contrast') {
 				pointCSS.color = renderer.getContrast(point.color || this.color);
 			}
+			/*= } =*/
 			if (dataLabelsOptions && dataLabelsOptions.color) {
 				pointCSS.color = dataLabelsOptions.color;
 			}

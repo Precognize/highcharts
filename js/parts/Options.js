@@ -8,7 +8,6 @@ import H from './Globals.js';
 import './Color.js';
 import './Utilities.js';
 var color = H.color,
-	each = H.each,
 	getTZOffset = H.getTZOffset,
 	isTouchDevice = H.isTouchDevice,
 	merge = H.merge,
@@ -245,22 +244,7 @@ H.defaultOptions = {
 		 * @sample {highcharts} highcharts/global/useutc-false/ False
 		 * @default true
 		 */
-		useUTC: true,
-
-		/*= if (build.classic) { =*/
-
-		/**
-		 * Path to the pattern image required by VML browsers in order to
-		 * draw radial gradients.
-		 * 
-		 * @type {String}
-		 * @default {highcharts} http://code.highcharts.com/{version}/gfx/vml-radial-gradient.png
-		 * @default {highstock} http://code.highcharts.com/highstock/{version}/gfx/vml-radial-gradient.png
-		 * @default {highmaps} http://code.highcharts.com/{version}/gfx/vml-radial-gradient.png
-		 * @since 2.3.0
-		 */
-		VMLRadialGradientURL: 'http://code.highcharts.com/@product.version@/gfx/vml-radial-gradient.png'
-		/*= } =*/
+		useUTC: true
 
 		/**
 		 * A custom `Date` class for advanced date handling. For example,
@@ -818,9 +802,10 @@ H.defaultOptions = {
 			theme: {
 
 				/**
-				 * The Z index for the reset zoom button.
+				 * The Z index for the reset zoom button. The default value 
+				 * places it below the tooltip that has Z index 7.
 				 */
-				zIndex: 20
+				zIndex: 6
 			},
 
 			/**
@@ -1205,7 +1190,7 @@ H.defaultOptions = {
 		 * 
 		 * @type {Number}
 		 * @sample {highcharts} highcharts/chart/spacingtop-100/
-		 * A top spacing of 100
+		 *         A top spacing of 100
 		 * @sample {highcharts} highcharts/chart/spacingtop-10/
 		 *         Floating chart title makes the plot area align to the default
 		 *         spacingTop of 10.
@@ -1356,11 +1341,9 @@ H.defaultOptions = {
 		 * 
 		 * @type {CSSObject}
 		 * @sample {highcharts} highcharts/title/style/ Custom color and weight
-		 * @sample {highcharts} highcharts/css/titles/ Styled mode
 		 * @sample {highstock} stock/chart/title-style/ Custom color and weight
-		 * @sample {highstock} highcharts/css/titles/ Styled mode
-		 * @sample {highmaps} highcharts/css/titles/ Styled mode
-		 * @default {highcharts,highmaps} { "color": "#333333", "fontSize": "18px" }
+		 * @sample highcharts/css/titles/ Styled mode
+		 * @default {highcharts|highmaps} { "color": "#333333", "fontSize": "18px" }
 		 * @default {highstock} { "color": "#333333", "fontSize": "16px" }
 		 * @apioption title.style
 		 */
@@ -1994,7 +1977,6 @@ H.defaultOptions = {
 		 * @sample {highcharts} highcharts/legend/rtl/ Symbol to the right
 		 * @default false
 		 * @since 2.2
-		 * @product highcharts highmaps
 		 * @apioption legend.rtl
 		 */
 
@@ -2410,12 +2392,9 @@ H.defaultOptions = {
 		/**
 		 * A string to append to the tooltip format.
 		 * 
-		 * @type {String}
 		 * @sample {highcharts} highcharts/tooltip/footerformat/ A table for value alignment
 		 * @sample {highmaps} maps/tooltip/format/ Format demo
-		 * @default false
 		 * @since 2.2
-		 * @product highcharts highmaps
 		 */
 		footerFormat: '',
 		
@@ -2688,7 +2667,6 @@ H.defaultOptions = {
 		 * @type {Number}
 		 * @default 500
 		 * @since 3.0
-		 * @product highcharts highmaps
 		 * @apioption tooltip.hideDelay
 		 */
 
@@ -2725,7 +2703,7 @@ H.defaultOptions = {
 		 * 
 		 * @type {String}
 		 * @default callout
-		 * @validvalues ["callout", "square"]
+		 * @validvalue ["callout", "square"]
 		 * @since 4.0
 		 * @apioption tooltip.shape
 		 */
@@ -2745,8 +2723,7 @@ H.defaultOptions = {
 		 * @sample {highcharts} highcharts/tooltip/shared-true/ True
 		 * @sample {highcharts} highcharts/tooltip/shared-x-crosshair/ True with x axis crosshair
 		 * @sample {highcharts} highcharts/tooltip/shared-true-mixed-types/ True with mixed series types
-		 * @default {highcharts} false
-		 * @default {highstock} true
+		 * @default false
 		 * @since 2.1
 		 * @product highcharts highstock
 		 * @apioption tooltip.shared
@@ -2757,12 +2734,19 @@ H.defaultOptions = {
 		 * to the axis. This is recommended over [shared](#tooltip.shared) tooltips
 		 * for charts with multiple line series, generally making them easier
 		 * to read.
+		 *
+		 * @productdesc {highstock} In Highstock, tooltips are split by default
+		 * since v6.0.0. Stock charts typically contain multi-dimension points
+		 * and multiple panes, making split tooltips the preferred layout over
+		 * the previous `shared` tooltip.
 		 * 
 		 * @type {Boolean}
 		 * @sample {highcharts} highcharts/tooltip/split/ Split tooltip
 		 * @sample {highstock} highcharts/tooltip/split/ Split tooltip
 		 * @sample {highmaps} highcharts/tooltip/split/ Split tooltip
-		 * @default false
+		 * @default {highcharts} false
+		 * @default {highstock} true
+		 * @product highcharts highstock
 		 * @since 5.0.0
 		 * @apioption tooltip.split
 		 */
@@ -2987,11 +2971,15 @@ function setTimeMethods() {
 		Date,
 		useUTC = globalOptions.useUTC,
 		GET = useUTC ? 'getUTC' : 'get',
-		SET = useUTC ? 'setUTC' : 'set';
+		SET = useUTC ? 'setUTC' : 'set',
+		setters = ['Minutes', 'Hours', 'Day', 'Date', 'Month', 'FullYear'],
+		getters = setters.concat(['Milliseconds', 'Seconds']),
+		n;
 
 	H.Date = Date = globalOptions.Date || win.Date; // Allow using a different Date class
 	Date.hcTimezoneOffset = useUTC && globalOptions.timezoneOffset;
 	Date.hcGetTimezoneOffset = getTimezoneOffsetOption();
+	Date.hcHasTimeZone = !!(Date.hcTimezoneOffset || Date.hcGetTimezoneOffset);
 	Date.hcMakeTime = function (year, month, date, hours, minutes, seconds) {
 		var d;
 		if (useUTC) {
@@ -3009,12 +2997,15 @@ function setTimeMethods() {
 		}
 		return d;
 	};
-	each(['Minutes', 'Hours', 'Day', 'Date', 'Month', 'FullYear'], function (s) {
-		Date['hcGet' + s] = GET + s;
-	});
-	each(['Milliseconds', 'Seconds', 'Minutes', 'Hours', 'Date', 'Month', 'FullYear'], function (s) {
-		Date['hcSet' + s] = SET + s;
-	});
+	
+	// Dynamically set setters and getters. Use for loop, H.each is not yet 
+	// overridden in oldIE.
+	for (n = 0; n < setters.length; n++) {
+		Date['hcGet' + setters[n]] = GET + setters[n];
+	}
+	for (n = 0; n < getters.length; n++) {
+		Date['hcSet' + getters[n]] = SET + getters[n];
+	}
 }
 
 /**

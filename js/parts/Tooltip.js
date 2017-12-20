@@ -336,7 +336,8 @@ H.Tooltip.prototype = {
 		var chart = this.chart,
 			distance = this.distance,
 			ret = {},
-			h = point.h || 0, // #4117
+			// Don't use h if chart isn't inverted (#7242)
+			h = (chart.inverted && point.h) || 0, // #4117
 			swapped,
 			first = ['y', chart.chartHeight, boxHeight,
 				point.plotY + chart.plotTop, chart.plotTop,
@@ -544,7 +545,7 @@ H.Tooltip.prototype = {
 
 			// update text
 			if (tooltip.split) {
-				this.renderSplit(text, pointOrPoints);
+				this.renderSplit(text, splat(pointOrPoints));
 			} else {
 
 				// Prevent the tooltip from flowing over the chart box (#6659)
@@ -608,6 +609,10 @@ H.Tooltip.prototype = {
 			headerHeight = 0,
 			tooltipLabel = this.getLabel();
 
+		// Graceful degradation for legacy formatters
+		if (H.isString(labels)) { 
+			labels = [false, labels];
+		}
 		// Create the individual labels for header and points, ignore footer
 		each(labels.slice(0, points.length + 1), function (str, i) {
 			if (str !== false) {
@@ -630,7 +635,15 @@ H.Tooltip.prototype = {
 
 				// Store the tooltip referance on the series
 				if (!tt) {
-					owner.tt = tt = ren.label(null, null, null, 'callout')
+					owner.tt = tt = ren.label(
+							null,
+							null,
+							null,
+							'callout',
+							null,
+							null,
+							options.useHTML
+						)
 						.addClass('highcharts-tooltip-box ' + colorClass)
 						.attr({
 							'padding': options.padding,
@@ -648,7 +661,7 @@ H.Tooltip.prototype = {
 						})
 						.add(tooltipLabel);
 				}
-
+		
 				tt.isActive = true;
 				tt.attr({
 					text: str
@@ -863,9 +876,15 @@ H.Tooltip.prototype = {
 
 		// Insert the footer date format if any
 		if (isDateTime && xDateFormat) {
-			formatString = formatString.replace(
-				'{point.key}',
-				'{point.key:' + xDateFormat + '}'
+			each(
+				(labelConfig.point && labelConfig.point.tooltipDateKeys) ||
+					['key'],
+				function (key) {
+					formatString = formatString.replace(
+						'{point.' + key + '}',
+						'{point.' + key + ':' + xDateFormat + '}'
+					);
+				}
 			);
 		}
 
@@ -884,9 +903,14 @@ H.Tooltip.prototype = {
 		return map(items, function (item) {
 			var tooltipOptions = item.series.tooltipOptions;
 			return (
-				tooltipOptions.pointFormatter ||
+				tooltipOptions[
+					(item.point.formatPrefix || 'point') + 'Formatter'
+				] ||
 				item.point.tooltipFormatter
-			).call(item.point, tooltipOptions.pointFormat);
+			).call(
+				item.point,
+				tooltipOptions[(item.point.formatPrefix || 'point') + 'Format']
+			);
 		});
 	}
 
